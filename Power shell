@@ -1,0 +1,111 @@
+# Set variables
+$username = "admin"
+$password = "admin"
+$loginUrl = "http://192.168.0.35:81/seeddms_Test/restapi/index.php/login"
+$parentFolderId = 1  # Assuming all folders are created under a common parent folder
+
+# Specify the path to the text file containing folderId and filePath
+$textFilePath = "C:\MH\TAX INVOICE\Text.txt"
+
+try {
+    # Read the contents of the text file
+    $textFileContent = Get-Content -Path $textFilePath
+
+    # Initialize variables
+    $folderId = $null
+    $filename = $null
+    $filesPath = $null
+
+    # Loop through each line in the file to find folderId, filename, and filePath
+    foreach ($line in $textFileContent) {
+        if ($line -match '^folderId:(.*?)$') {
+            $folderId = $Matches[1].Trim()
+        }
+        elseif ($line -match '^fileName:(.*?)$') {
+            $filename = $Matches[1].Trim()
+        }
+        elseif ($line -match '^filePath:(.*?)$') {
+            $filesPath = $Matches[1].Trim()
+        }
+    }
+
+    # Check if folderId and filePath were retrieved successfully
+    if ($folderId -and $filesPath) {
+        # Log in to the system
+        $sessionResponse = Invoke-WebRequest -Uri $loginUrl -Method Post -ContentType "application/x-www-form-urlencoded" -Body "user=$username&pass=$password" -SessionVariable session -UseBasicParsing
+        Write-Output "Login Response Status Code: $($sessionResponse.StatusCode)"
+        Write-Output "Login Response Content: $($sessionResponse.Content)"
+
+        if ($sessionResponse.StatusCode -eq 200) {
+            Write-Output "Login successful"
+
+            # List all folders in the parent folder
+            $listFoldersUrl = "http://192.168.0.35:81/seeddms_Test/restapi/index.php/folder/$parentFolderId/folders"
+            $listFoldersResponse = Invoke-WebRequest -Uri $listFoldersUrl -Method Get -Headers @{
+                "Cookie" = $sessionResponse.Headers["Set-Cookie"]
+            } -UseBasicParsing
+            $folders = $listFoldersResponse.Content | ConvertFrom-Json
+
+            # Check if the folder already exists
+            $existingFolder = $folders.data | Where-Object { $_.name -eq $folderId }
+
+            if ($existingFolder) {
+                Write-Output "Folder '$folderId' exists. Proceeding to delete it."
+
+                # Delete the existing folder
+                $deleteFolderUrl = "http://192.168.0.35:81/seeddms_Test/restapi/index.php/folder/$($existingFolder.id)"
+                $deleteFolderResponse = Invoke-WebRequest -Uri $deleteFolderUrl -Method DELETE -Headers @{
+                    "Cookie" = $sessionResponse.Headers["Set-Cookie"]
+                } -UseBasicParsing
+                Write-Output "Folder deleted successfully"
+            }
+            else {
+                Write-Output "Folder does not exist. Proceeding to create a new folder."
+            }
+
+            # Create a new folder
+            $createFolderUrl = "http://192.168.0.35:81/seeddms_Test/restapi/index.php/folder/$parentFolderId/createfolder"
+            Write-Host "Creating new folder with name: $folderId"
+
+            $createFolderParams = @{
+                Uri = $createFolderUrl
+                Method = 'POST'
+                ContentType = 'application/x-www-form-urlencoded'
+                Headers = @{
+                    "Cookie" = $sessionResponse.Headers["Set-Cookie"]
+                }
+                Body = "name=$folderId&comment=New Folder for $folderId"
+                WebSession = $session
+            }
+            $createFolderResponse = Invoke-WebRequest @createFolderParams -UseBasicParsing
+            Write-Output "Create Folder Response Status Code: $($createFolderResponse.StatusCode)"
+            Write-Output "Create Folder Response Content: $($createFolderResponse.Content)"
+
+            Write-Output "Folder created successfully"
+
+            # Upload the file to the new folder
+            $uploadUrl = "http://192.168.0.35:81/seeddms_Test/restapi/index.php/folder/$($folderId)/document?name=$filename&origfilename=$filename&comment=Uploaded by script"
+            Write-Host "Uploading file to folder: $folderId"
+
+            $uploadParams = @{
+                Uri = $uploadUrl
+                Method = 'PUT'
+                ContentType = 'application/pdf'
+                Headers = @{
+                    "Cookie" = $sessionResponse.Headers["Set-Cookie"]
+                }
+                InFile = $filesPath
+                WebSession = $session
+            }
+            $uploadResponse = Invoke-WebRequest @uploadParams -UseBasicParsing
+            Write-Output "File uploaded successfully"
+        } else {
+            Write-Output "Login failed"
+        }
+    } else {
+        Write-Output "Failed to retrieve folderId or filePath from the file"
+    }
+}
+catch {
+    Write-Output "An error occurred: $_"
+}
